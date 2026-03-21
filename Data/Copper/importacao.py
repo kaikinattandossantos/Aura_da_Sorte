@@ -1,41 +1,30 @@
-# Install dependencies as needed:
-# pip install kagglehub[pandas-datasets]
 import kagglehub
 from kagglehub import KaggleDatasetAdapter
-
-# Set the path to the file you'd like to load
-file_path = ""
-
-# Load the latest version
-df = kagglehub.load_dataset(
-  KaggleDatasetAdapter.PANDAS,
-  "hubertsidorowicz/football-players-stats-2025-2026",
-  file_path,
-  # Provide any additional arguments like 
-  # sql_query or pandas_kwargs. See the 
-  # documenation for more information:
-  # https://github.com/Kaggle/kagglehub/blob/main/README.md#kaggledatasetadapterpandas
-)
-
-print("First 5 records:", df.head())
-
-# Install dependencies as needed:
-# pip install kagglehub[pandas-datasets]
 import kagglehub
-from kagglehub import KaggleDatasetAdapter
+import os
 
-# Set the path to the file you'd like to load
-file_path = ""
+# Forçar o download para o diretório padrão e listar arquivos
+try:
+    print("Baixando Player Stats...")
+    path_stats = kagglehub.dataset_download("hubertsidorowicz/football-players-stats-2025-2026")
+    print(f"Arquivos em Stats: {os.listdir(path_stats)}")
 
-# Load the latest version
-df = kagglehub.load_dataset(
-  KaggleDatasetAdapter.PANDAS,
-  "saurabhshahane/statsbomb-football-data",
-  file_path,
-  # Provide any additional arguments like 
-  # sql_query or pandas_kwargs. See the 
-  # documenation for more information:
-  # https://github.com/Kaggle/kagglehub/blob/main/README.md#kaggledatasetadapterpandas
-)
+    print("\nBaixando StatsBomb...")
+    path_sb = kagglehub.dataset_download("saurabhshahane/statsbomb-football-data")
+    print(f"Arquivos em StatsBomb: {os.listdir(path_sb)}")
+except Exception as e:
+    print(f"Erro no download: {e}")
 
-print("First 5 records:", df.head())
+# 2. Carregando Dados do StatsBomb
+# Geralmente o StatsBomb no Kaggle tem arquivos .csv ou .json
+file_path_sb = "events.csv" 
+
+try:
+    df_sb = kagglehub.dataset_load(
+        KaggleDatasetAdapter.PANDAS,
+        "saurabhshahane/statsbomb-football-data",
+        file_path_sb
+    )
+    print("\nStatsBomb - Primeiros 5 registros:\n", df_sb.head())
+except Exception as e:
+    print(f"Erro ao carregar StatsBomb: {e}")
