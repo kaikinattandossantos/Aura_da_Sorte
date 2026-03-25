@@ -33,3 +33,18 @@ Thumbs.db
 # Temporary files
 *.tmp
 *.temp
+
+# Dados (Nunca suba arquivos de GB)
+*.parquet
+*.csv
+*.pkl
+
+# Segredos
+.env
+
+# Python 
+__pycache__/
+*.pyc
+
+# Notebooks (Opcional: se quiser subir apenas o código limpo)
+.ipynb_checkpoints
