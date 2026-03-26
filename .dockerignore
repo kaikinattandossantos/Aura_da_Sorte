@@ -1,0 +1,8 @@
+.git
+.gitignore
+*.ipynb
+__pycache__
+*.pyc
+*.log
+.env
+node_modules

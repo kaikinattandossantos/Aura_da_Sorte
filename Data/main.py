@@ -160,6 +160,8 @@ async def analyze_match(match_id: int):
             "ai_summary": f"A IA analisou {len(partida)} finalizações. O desempenho clínico médio foi de {partida['eficiencia_clinica'].mean():.3f}."
         }
 
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Erro no processamento: {str(e)}")
 
