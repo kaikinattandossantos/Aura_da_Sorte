@@ -97,10 +97,16 @@ cards_metrics_path = os.path.join(COPPER_DIR, "cards_model_metrics.json")
 cards_yellow_model_path = os.path.join(COPPER_DIR, "cards_yellow_model.joblib")
 cards_red_model_path = os.path.join(COPPER_DIR, "cards_red_model.joblib")
 
-HF_TOKEN = os.getenv("HF_TOKEN") 
-oraculo_model_path = os.path.join(BASE_DIR, "oraculo_iminencia.json")
-oraculo_model = xgb.XGBClassifier()
-oraculo_model.load_model(oraculo_model_path)
+HF_TOKEN = os.getenv("HF_TOKEN")
+oraculo_model_path = os.path.join(COPPER_DIR, "oraculo_iminencia.json")
+oraculo_model = None
+try:
+    _m = xgb.XGBClassifier()
+    _m.load_model(oraculo_model_path)
+    oraculo_model = _m
+    print("🔮 Oráculo de iminência carregado.")
+except Exception as e:
+    print(f"⚠️ Oráculo de iminência não carregado: {e}")
 
 live_buffers: Dict[str, list] = {}
 
