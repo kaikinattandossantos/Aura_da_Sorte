@@ -22,6 +22,15 @@ cards_metrics_path = os.path.join(COPPER_DIR, "cards_model_metrics.json")
 cards_yellow_model_path = os.path.join(COPPER_DIR, "cards_yellow_model.joblib")
 cards_red_model_path = os.path.join(COPPER_DIR, "cards_red_model.joblib")
 
+HF_TOKEN = os.getenv("HF_TOKEN") 
+oraculo_model_path = os.path.join(BASE_DIR, "oraculo_iminencia.json")
+oraculo_model = xgb.XGBClassifier()
+oraculo_model.load_model(oraculo_model_path)
+
+live_buffers: Dict[str, list] = {}
+
+
+
 print(f"🔄 Buscando arquivos em: {COPPER_DIR}")
 
 df_shots = pd.DataFrame()
@@ -253,6 +262,12 @@ async def analyze_team_cards(team_name: str, top_n: int = 10):
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Erro no processamento de cartões do time: {str(e)}")
+
+
+
+
+
+
 
 if __name__ == "__main__":
     import uvicorn
