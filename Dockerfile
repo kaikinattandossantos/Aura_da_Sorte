@@ -17,6 +17,8 @@ RUN pip install --no-cache-dir \
     pandas \
     numpy \
     xgboost \
+    scikit-learn \
+    joblib \
     pydantic
 
 # Copy application code and data
