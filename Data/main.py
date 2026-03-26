@@ -6,7 +6,82 @@ import xgboost as xgb
 import os
 import json
 import joblib
-from typing import Dict, Any
+from typing import Dict, Any, List, Optional
+from pydantic import BaseModel
+
+
+# ---------- Request models for /matches/analyze ----------
+
+class MatchTimer(BaseModel):
+    tm: int
+    ts: int
+    tt: str
+    ta: int
+    md: int
+
+class TeamInfo(BaseModel):
+    id: str
+    name: str
+    image_id: Optional[str] = None
+    cc: Optional[str] = None
+
+class LeagueInfo(BaseModel):
+    id: str
+    name: str
+    cc: Optional[str] = None
+
+class HalfScore(BaseModel):
+    home: str
+    away: str
+
+class MatchEvent(BaseModel):
+    id: str
+    text: str
+
+class MatchStats(BaseModel):
+    attacks: Optional[List[str]] = None
+    ball_safe: Optional[List[str]] = None
+    corners: Optional[List[str]] = None
+    corner_h: Optional[List[str]] = None
+    dangerous_attacks: Optional[List[str]] = None
+    goals: Optional[List[str]] = None
+    off_target: Optional[List[str]] = None
+    on_target: Optional[List[str]] = None
+    penalties: Optional[List[str]] = None
+    possession_rt: Optional[List[str]] = None
+    redcards: Optional[List[str]] = None
+    substitutions: Optional[List[str]] = None
+    yellowcards: Optional[List[str]] = None
+    yellowred_cards: Optional[List[str]] = None
+
+class MatchExtra(BaseModel):
+    length: Optional[int] = None
+    home_pos: Optional[str] = None
+    away_pos: Optional[str] = None
+    numberofperiods: Optional[str] = None
+    periodlength: Optional[str] = None
+    round: Optional[str] = None
+
+class MatchData(BaseModel):
+    id: str
+    sport_id: Optional[str] = None
+    time: Optional[str] = None
+    time_status: Optional[str] = None
+    league: Optional[LeagueInfo] = None
+    home: Optional[TeamInfo] = None
+    away: Optional[TeamInfo] = None
+    ss: Optional[str] = None
+    timer: Optional[MatchTimer] = None
+    scores: Optional[Dict[str, HalfScore]] = None
+    stats: Optional[MatchStats] = None
+    extra: Optional[MatchExtra] = None
+    events: Optional[List[MatchEvent]] = None
+
+class AnalyzeMatchBody(BaseModel):
+    success: Optional[int] = None
+    results: List[MatchData]
+
+# ---------------------------------------------------------
 
 app = FastAPI(title="Analytics API - Performance Pro")
 
@@ -127,46 +202,189 @@ except Exception as e:
 async def root():
     return {"status": "online", "api": "Analytics Performance"}
 
-@app.post("/matches/analyze/{match_id}")
-async def analyze_match(match_id: int):
+def _stat(lst: Optional[List[str]], idx: int) -> int:
     try:
-        if model is None or df_shots.empty:
-            raise HTTPException(status_code=503, detail="Modelo de finalizações indisponível no momento.")
+        return int(lst[idx]) if lst and len(lst) > idx else 0
+    except (ValueError, TypeError):
+        return 0
 
-        partida = df_shots[df_shots["match_id"].astype(str) == str(match_id)]
-        
-        if partida.empty:
-            raise HTTPException(status_code=404, detail=f"Partida {match_id} não encontrada no banco local.")
 
-        X = partida[['distancia', 'angulo_visao', 'sob_pressao']].fillna(0)
-        
-        probs = model.predict_proba(X)[:, 1]
-        partida = partida.copy()
-        partida['prob_ia'] = probs
-        
-        partida['eficiencia_clinica'] = probs - partida['shot_statsbomb_xg']
+@app.post("/matches/analyze/{match_id}")
+async def analyze_match(match_id: str, body: AnalyzeMatchBody):
+    try:
+        match = next((r for r in body.results if r.id == str(match_id)), None)
+        if match is None:
+            if body.results:
+                match = body.results[0]
+            else:
+                raise HTTPException(status_code=404, detail="Nenhuma partida encontrada no corpo da requisição.")
 
-        chutes_response = []
-        for _, row in partida.iterrows():
-            chutes_response.append({
-                "minuto": int(row["minute"]),
-                "jogador": row["player_name"],
-                "xg_original": round(float(row["shot_statsbomb_xg"]), 4),
-                "probabilidade_ia": round(float(row["prob_ia"]), 4),
-                "diferencial": round(float(row["eficiencia_clinica"]), 4),
-                "gol_confirmado": bool(row["is_goal"])
-            })
+        s = match.stats or MatchStats()
+        timer = match.timer
+
+        # Raw stats
+        home_attacks       = _stat(s.attacks, 0)
+        away_attacks       = _stat(s.attacks, 1)
+        home_dangerous     = _stat(s.dangerous_attacks, 0)
+        away_dangerous     = _stat(s.dangerous_attacks, 1)
+        home_possession    = _stat(s.possession_rt, 0)
+        away_possession    = _stat(s.possession_rt, 1)
+        home_on_target     = _stat(s.on_target, 0)
+        away_on_target     = _stat(s.on_target, 1)
+        home_off_target    = _stat(s.off_target, 0)
+        away_off_target    = _stat(s.off_target, 1)
+        home_corners       = _stat(s.corners, 0)
+        away_corners       = _stat(s.corners, 1)
+        home_corners_ht    = _stat(s.corner_h, 0)
+        away_corners_ht    = _stat(s.corner_h, 1)
+        home_yellow        = _stat(s.yellowcards, 0)
+        away_yellow        = _stat(s.yellowcards, 1)
+        home_yellowred     = _stat(s.yellowred_cards, 0)
+        away_yellowred     = _stat(s.yellowred_cards, 1)
+        home_red           = _stat(s.redcards, 0)
+        away_red           = _stat(s.redcards, 1)
+        home_goals         = _stat(s.goals, 0)
+        away_goals         = _stat(s.goals, 1)
+        home_ball_safe     = _stat(s.ball_safe, 0)
+        away_ball_safe     = _stat(s.ball_safe, 1)
+        home_subs          = _stat(s.substitutions, 0)
+        away_subs          = _stat(s.substitutions, 1)
+        home_penalties     = _stat(s.penalties, 0)
+        away_penalties     = _stat(s.penalties, 1)
+
+        # Derived: finishing
+        home_shots_total = home_on_target + home_off_target
+        away_shots_total = away_on_target + away_off_target
+        home_accuracy    = round(home_on_target / home_shots_total * 100, 1) if home_shots_total else 0.0
+        away_accuracy    = round(away_on_target / away_shots_total * 100, 1) if away_shots_total else 0.0
+        home_conversion  = round(home_goals / home_on_target * 100, 1) if home_on_target else 0.0
+        away_conversion  = round(away_goals / away_on_target * 100, 1) if away_on_target else 0.0
+
+        # Derived: attack pressure
+        total_attacks = home_attacks + away_attacks + home_dangerous + away_dangerous
+        home_atk_share = round((home_attacks + home_dangerous) / total_attacks * 100, 1) if total_attacks else 50.0
+        home_danger_pct = round(home_dangerous / (home_attacks + home_dangerous) * 100, 1) if (home_attacks + home_dangerous) else 0.0
+        away_danger_pct = round(away_dangerous / (away_attacks + away_dangerous) * 100, 1) if (away_attacks + away_dangerous) else 0.0
+
+        # Derived: discipline pressure (yellow=1, yellow-red=2, red=3)
+        home_card_pressure = home_yellow + home_yellowred * 2 + home_red * 3
+        away_card_pressure = away_yellow + away_yellowred * 2 + away_red * 3
+
+        # Score parsing
+        score_parts = (match.ss or "0-0").split("-")
+        current_home = int(score_parts[0]) if len(score_parts) > 0 else 0
+        current_away = int(score_parts[1]) if len(score_parts) > 1 else 0
+
+        ht_score = match.scores.get("1") if match.scores else None
+        ht_home = int(ht_score.home) if ht_score else 0
+        ht_away = int(ht_score.away) if ht_score else 0
+
+        # Events timeline
+        goals_tl, cards_tl, corners_tl = [], [], []
+        if match.events:
+            for ev in match.events:
+                t = ev.text
+                if "Goal" in t and "Race" not in t:
+                    goals_tl.append(t)
+                elif "Yellow Card" in t or "Red Card" in t:
+                    cards_tl.append(t)
+                elif "Corner" in t and "Race" not in t:
+                    corners_tl.append(t)
+
+        # Match state
+        minute = timer.tm if timer else 0
+        added_time = timer.ta if timer else 0
+        time_status_map = {"1": "em_jogo", "2": "encerrado", "3": "nao_iniciado", "4": "adiado"}
+        status_label = time_status_map.get(match.time_status or "", match.time_status)
+
+        # AI narrative
+        leader = match.home.name if match.home and current_home > current_away else (match.away.name if match.away else "Visitante") if current_away > current_home else None
+        vantagem = abs(current_home - current_away)
+        dominance_team = match.home.name if home_atk_share >= 50 and match.home else (match.away.name if match.away else "Visitante")
+        summary_parts = [
+            f"Minuto {minute}+{added_time}: placar {match.ss}.",
+            f"{dominance_team} domina os ataques com {round(home_atk_share if home_atk_share >= 50 else 100 - home_atk_share, 1)}% do volume ofensivo.",
+        ]
+        if leader:
+            summary_parts.append(f"{leader} vence por {vantagem} gol(s).")
+        if home_card_pressure > 2 or away_card_pressure > 2:
+            pressured = match.home.name if home_card_pressure > away_card_pressure and match.home else (match.away.name if match.away else "Visitante")
+            summary_parts.append(f"{pressured} acumula pressão disciplinar alta (score {max(home_card_pressure, away_card_pressure)}).")
+        if home_conversion > 0 or away_conversion > 0:
+            best = match.home.name if home_conversion >= away_conversion and match.home else (match.away.name if match.away else "Visitante")
+            summary_parts.append(f"{best} é mais clínico: {max(home_conversion, away_conversion):.0f}% de conversão nas finalizações no gol.")
 
         return {
-            "match_id": match_id,
+            "match_id": match.id,
             "status": "success",
-            "estatisticas": {
-                "total_finalizacoes": len(partida),
-                "expectativa_ia_total": round(float(partida["prob_ia"].sum()), 2),
-                "eficiencia_media": round(float(partida["eficiencia_clinica"].mean()), 4)
+            "partida": {
+                "liga": match.league.name if match.league else None,
+                "rodada": match.extra.round if match.extra else None,
+                "casa": match.home.name if match.home else None,
+                "fora": match.away.name if match.away else None,
+                "placar_atual": match.ss,
+                "placar_primeiro_tempo": f"{ht_home}-{ht_away}",
+                "gols_segundo_tempo": {"casa": current_home - ht_home, "fora": current_away - ht_away},
+                "minuto": minute,
+                "acrescimo": added_time,
+                "status_jogo": status_label,
             },
-            "lances": chutes_response,
-            "ai_summary": f"A IA analisou {len(partida)} finalizações. O desempenho clínico médio foi de {partida['eficiencia_clinica'].mean():.3f}."
+            "dominio": {
+                "posse_bola_pct": {"casa": home_possession, "fora": away_possession},
+                "ataques": {"casa": home_attacks, "fora": away_attacks},
+                "ataques_perigosos": {"casa": home_dangerous, "fora": away_dangerous},
+                "participacao_ofensiva_pct": {
+                    "casa": round(home_atk_share, 1),
+                    "fora": round(100 - home_atk_share, 1),
+                },
+                "ratio_perigo_pct": {"casa": home_danger_pct, "fora": away_danger_pct},
+                "bola_segura": {"casa": home_ball_safe, "fora": away_ball_safe},
+            },
+            "finalizacoes": {
+                "casa": {
+                    "total": home_shots_total,
+                    "no_gol": home_on_target,
+                    "fora_gol": home_off_target,
+                    "precisao_pct": home_accuracy,
+                    "conversao_pct": home_conversion,
+                },
+                "fora": {
+                    "total": away_shots_total,
+                    "no_gol": away_on_target,
+                    "fora_gol": away_off_target,
+                    "precisao_pct": away_accuracy,
+                    "conversao_pct": away_conversion,
+                },
+            },
+            "escanteios": {
+                "casa": {"total": home_corners, "primeiro_tempo": home_corners_ht, "segundo_tempo": home_corners - home_corners_ht},
+                "fora": {"total": away_corners, "primeiro_tempo": away_corners_ht, "segundo_tempo": away_corners - away_corners_ht},
+                "total": home_corners + away_corners,
+            },
+            "disciplina": {
+                "casa": {
+                    "amarelos": home_yellow,
+                    "amarelo_vermelho": home_yellowred,
+                    "vermelhos": home_red,
+                    "penaltis": home_penalties,
+                    "substituicoes": home_subs,
+                    "pressao_disciplinar": home_card_pressure,
+                },
+                "fora": {
+                    "amarelos": away_yellow,
+                    "amarelo_vermelho": away_yellowred,
+                    "vermelhos": away_red,
+                    "penaltis": away_penalties,
+                    "substituicoes": away_subs,
+                    "pressao_disciplinar": away_card_pressure,
+                },
+            },
+            "linha_do_tempo": {
+                "gols": goals_tl,
+                "cartoes": cards_tl,
+                "escanteios": corners_tl,
+            },
+            "resumo_ia": " ".join(summary_parts),
         }
 
     except HTTPException:
