@@ -47,9 +47,9 @@ def init_models():
 
     print(f"🔄 Buscando arquivos em: {COPPER_DIR}")
 
-    # Oráculo
+    # Oráculo — carrega como Booster para evitar problema de num_feature=0
     try:
-        oraculo_model = xgb.XGBClassifier()
+        oraculo_model = xgb.Booster()
         oraculo_model.load_model(oraculo_model_path)
         print("🧠 Oráculo Híbrido carregado com sucesso.")
     except Exception as e:

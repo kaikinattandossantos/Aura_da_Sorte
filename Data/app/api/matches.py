@@ -1,5 +1,7 @@
 from fastapi import APIRouter, HTTPException
 import pandas as pd
+import numpy as np
+import xgboost as xgb
 from app.models.schemas import MatchAnalyzeRequest, B365MatchEvent
 from app.services.heuristics import (
     preparar_input_hibrido,
@@ -89,7 +91,8 @@ async def analyze_match(match_id: int, live_data: MatchAnalyzeRequest):
              raise Exception("O modelo Oráculo não foi carregado corretamente.")
 
         # 2. O Oráculo Híbrido (XGBoost) prevê a iminência de gol
-        prob = float(ml_manager.oraculo_model.predict_proba([features])[:, 1][0])
+        dmatrix = xgb.DMatrix(np.array([features]))
+        prob = float(ml_manager.oraculo_model.predict(dmatrix)[0])
         
         # Extrai os metadados do payload da BetsAPI para os nossos insights completos
         stats_api = _extract_stats_payload(dados_dict)
@@ -164,7 +167,8 @@ async def match_dashboard(match_id: int, event: B365MatchEvent):
         if ml_manager.oraculo_model is None:
             raise Exception("O modelo Oráculo não foi carregado corretamente.")
 
-        prob = float(ml_manager.oraculo_model.predict_proba([features])[:, 1][0])
+        dmatrix = xgb.DMatrix(np.array([features]))
+        prob = float(ml_manager.oraculo_model.predict(dmatrix)[0])
 
         contexto_ia = (
             f"{match.home.name} vs {match.away.name}: {match.ss}. "
