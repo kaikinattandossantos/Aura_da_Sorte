@@ -1,12 +1,16 @@
 from fastapi import APIRouter, HTTPException
 import pandas as pd
-from app.models.schemas import MatchAnalyzeRequest
+from app.models.schemas import MatchAnalyzeRequest, B365MatchEvent
 from app.services.heuristics import (
-    preparar_input_hibrido, 
-    _extract_stats_payload, 
-    calcular_estatisticas_ao_vivo, 
-    calcular_probabilidades_heuristicas, 
-    calcular_previsoes_jogo
+    preparar_input_hibrido,
+    _extract_stats_payload,
+    calcular_estatisticas_ao_vivo,
+    calcular_probabilidades_heuristicas,
+    calcular_previsoes_jogo,
+    cc_to_flag,
+    extract_timer,
+    parse_events_to_alerts,
+    _to_float,
 )
 from app.services.llm import gerar_narrativa_oraculo
 from app.core import ml_manager
@@ -130,4 +134,138 @@ async def analyze_match(match_id: int, live_data: MatchAnalyzeRequest):
                 "message": f"Erro ao processar análise da partida. {str(e)}",
                 "match_id": match_id
             }
+        )
+
+
+@router.post("/dashboard/{match_id}")
+async def match_dashboard(match_id: int, event: B365MatchEvent):
+    if not event.results:
+        raise HTTPException(status_code=422, detail="Campo 'results' vazio no payload.")
+
+    match = event.results[0]
+
+    try:
+        analyze_input = {
+            "ataques_perigosos": {},
+            "escanteios": {},
+            "x": 105.0,
+            "y": 40.0,
+            "location": None,
+            "stats": {
+                "dangerous_attacks": [int(_to_float(v)) for v in match.stats.dangerous_attacks],
+                "corners": [int(_to_float(v)) for v in match.stats.corners],
+            },
+            "results": [],
+        }
+
+        parsed_input = preparar_input_hibrido(analyze_input)
+        features = parsed_input["features"]
+
+        if ml_manager.oraculo_model is None:
+            raise Exception("O modelo Oráculo não foi carregado corretamente.")
+
+        prob = float(ml_manager.oraculo_model.predict_proba([features])[:, 1][0])
+
+        contexto_ia = (
+            f"{match.home.name} vs {match.away.name}: {match.ss}. "
+            f"{features[8]:.0f} ataques perigosos e {features[7]:.0f} escanteios."
+        )
+        narrativa = await gerar_narrativa_oraculo(contexto_ia, prob)
+
+        # --- monta resposta no formato app.json ---
+        nivel = "CRÍTICO" if prob > 0.80 else "ALTO" if prob > 0.60 else "NORMAL"
+        timer = extract_timer(match)
+        stats = match.stats
+
+        try:
+            goals_home, goals_away = (int(p) for p in match.ss.split("-", 1))
+        except Exception:
+            goals_home = int(_to_float(stats.goals[0]))
+            goals_away = int(_to_float(stats.goals[1])) if len(stats.goals) > 1 else 0
+
+        poss_home = int(_to_float(stats.possession_rt[0], 50))
+        poss_away = int(_to_float(stats.possession_rt[1], 50)) if len(stats.possession_rt) > 1 else 100 - poss_home
+        attack_home = int(_to_float(stats.dangerous_attacks[0]))
+        attack_away = int(_to_float(stats.dangerous_attacks[1])) if len(stats.dangerous_attacks) > 1 else 0
+
+        total_attacks = max(1, attack_home + attack_away)
+        momentum_home = min(95, round(attack_home / total_attacks * 100))
+        momentum_away = 100 - momentum_home
+
+        home_prob = round(prob, 2)
+        away_prob = round((1 - prob) * 0.35, 2)
+        draw_prob = round(max(0.0, 1.0 - home_prob - away_prob), 2)
+
+        alerts = parse_events_to_alerts(match.events, match.home.name, match.away.name)
+        if narrativa.get("summary"):
+            alerts.insert(0, {"type": "info", "message": narrativa["summary"], "minute": timer})
+
+        stats_api = {
+            "dangerous_attacks": [attack_home, attack_away],
+            "corners": [int(_to_float(v)) for v in stats.corners],
+            "on_target": [int(_to_float(v)) for v in stats.on_target],
+            "attacks": [int(_to_float(v)) for v in stats.attacks],
+            "yellowcards": [int(_to_float(v)) for v in stats.yellowcards],
+            "substitutions": [int(_to_float(v)) for v in stats.substitutions],
+            "possession_rt": [poss_home, poss_away],
+        }
+        proximos = calcular_probabilidades_heuristicas(stats_api, prob, timer)
+        previsoes = calcular_previsoes_jogo(stats_api, match.ss)
+
+        total_goals = goals_home + goals_away
+
+        return {
+            "match_id": match.id,
+            "league": match.league.name,
+            "timer": timer,
+            "score": match.ss,
+            "teams": {
+                "home": {"name": match.home.name, "flag": cc_to_flag(match.home.cc)},
+                "away": {"name": match.away.name, "flag": cc_to_flag(match.away.cc)},
+            },
+            "predictions": {
+                "home_prob": home_prob,
+                "draw_prob": draw_prob,
+                "away_prob": away_prob,
+                "alert_level": nivel,
+            },
+            "alerts": alerts,
+            "momentum": {
+                "home": momentum_home,
+                "away": momentum_away,
+                "note": f"{match.home.name} dominando" if momentum_home > 60 else f"{match.away.name} dominando" if momentum_away > 60 else "Equilíbrio",
+            },
+            "live_stats": {
+                "possession_home": poss_home,
+                "possession_away": poss_away,
+                "goals_home": goals_home,
+                "goals_away": goals_away,
+                "attack_home": attack_home,
+                "attack_away": attack_away,
+            },
+            "next_minutes": [
+                {"event": "goal",           "label": "Gol nos próx. 10 min",  "window": f"{timer}' → {timer + 10}'", "prob": round(proximos["gol_prox_10_min"] / 100, 2),            "color": "green" if prob > 0.6 else "yellow"},
+                {"event": "corner",         "label": "Escanteio",              "window": "Próximos 5 min",            "prob": round(proximos["escanteio_prox_5_min"] / 100, 2),        "color": "yellow"},
+                {"event": "yellow_card",    "label": "Cartão amarelo",         "window": "Próximos 10 min",           "prob": round(proximos["cartao_amarelo_prox_10_min"] / 100, 2),  "color": "yellow"},
+                {"event": "substitution",   "label": "Substituição",           "window": "Próximos 5 min",            "prob": round(proximos["substituicao_prox_5_min"] / 100, 2),     "color": "blue"},
+                {"event": "dangerous_foul", "label": "Falta perigosa",         "window": "Próximos 5 min",            "prob": round(proximos["falta_perigosa_prox_5_min"] / 100, 2),  "color": "red"},
+                {"event": "shot_on_target", "label": "Chute a gol",            "window": "Próximos 3 min",            "prob": round(proximos["chute_gol_prox_3_min"] / 100, 2),        "color": "green" if prob > 0.7 else "yellow"},
+            ],
+            "final_result": [
+                {"market": "home_win",                    "label": f"{match.home.name} vence",          "description": "Vitória do mandante", "prob": round(previsoes["vencedor_casa_prob"] / 100, 2), "color": "green" if previsoes["vencedor_casa_prob"] > 60 else "yellow" if previsoes["vencedor_casa_prob"] > 40 else "red"},
+                {"market": "btts",                        "label": "Ambos marcam",                      "description": "Ambas marcam",        "prob": round(previsoes["ambos_marcam_prob"] / 100, 2), "color": "green" if previsoes["ambos_marcam_prob"] > 60 else "yellow" if previsoes["ambos_marcam_prob"] > 40 else "red"},
+                {"market": f"over_{total_goals + 1}_5",  "label": f"Mais de {total_goals + 1},5 gols", "description": "Total da partida",    "prob": round(previsoes["mais_gols_prob"] / 100, 2),    "color": "green" if previsoes["mais_gols_prob"] > 60 else "yellow" if previsoes["mais_gols_prob"] > 40 else "red"},
+            ],
+        }
+
+    except Exception as e:
+        print(f"❌ Erro no Dashboard: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "status": "error",
+                "code": "DASHBOARD_PROCESSING_ERROR",
+                "message": f"Erro ao processar dashboard da partida. {str(e)}",
+                "match_id": match_id,
+            },
         )

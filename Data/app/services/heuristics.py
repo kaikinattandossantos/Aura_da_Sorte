@@ -1,5 +1,57 @@
+import re
 import numpy as np
 from typing import Dict, Any
+
+CC_TO_FLAG: Dict[str, str] = {
+    "ar": "🇦🇷", "br": "🇧🇷", "es": "🇪🇸", "de": "🇩🇪", "fr": "🇫🇷",
+    "it": "🇮🇹", "pt": "🇵🇹", "nl": "🇳🇱", "be": "🇧🇪", "us": "🇺🇸",
+    "mx": "🇲🇽", "co": "🇨🇴", "uy": "🇺🇾", "cl": "🇨🇱", "pe": "🇵🇪",
+    "bo": "🇧🇴", "py": "🇵🇾", "ec": "🇪🇨", "ve": "🇻🇪", "gb": "🇬🇧",
+    "en": "🏴󠁧󠁢󠁥󠁮󠁧󠁿", "tr": "🇹🇷", "ru": "🇷🇺", "cn": "🇨🇳", "jp": "🇯🇵",
+    "kr": "🇰🇷", "dz": "🇩🇿", "gt": "🇬🇹", "sa": "🇸🇦", "ua": "🇺🇦",
+    "ng": "🇳🇬", "gh": "🇬🇭", "za": "🇿🇦", "eg": "🇪🇬", "ma": "🇲🇦",
+    "at": "🇦🇹", "ch": "🇨🇭", "se": "🇸🇪", "no": "🇳🇴", "dk": "🇩🇰",
+    "pl": "🇵🇱", "cz": "🇨🇿", "hu": "🇭🇺", "ro": "🇷🇴", "hr": "🇭🇷",
+    "gr": "🇬🇷",
+}
+
+
+def cc_to_flag(cc: str) -> str:
+    return CC_TO_FLAG.get(cc.lower(), "")
+
+
+def extract_timer(match) -> int:
+    """Retorna o minuto atual da partida a partir de um B365MatchResult."""
+    if match.time_status == "3":
+        return match.extra.length
+    minutes = [
+        int(m.group(1))
+        for ev in match.events
+        if (m := re.match(r"^(\d+)'", ev.text))
+    ]
+    return max(minutes) if minutes else 0
+
+
+def parse_events_to_alerts(events, home_name: str, away_name: str) -> list:
+    """Converte eventos B365 em alertas para o dashboard."""
+    alerts = []
+    for ev in events:
+        m = re.match(r"^(\d+)'", ev.text)
+        if not m:
+            continue
+        minute = int(m.group(1))
+        lower = ev.text.lower()
+
+        if "goal" in lower and "race" not in lower and "score after" not in lower:
+            alerts.append({"type": "success", "message": ev.text, "minute": minute})
+        elif "red card" in lower:
+            alerts.append({"type": "danger", "message": ev.text, "minute": minute})
+        elif "yellow card" in lower:
+            alerts.append({"type": "warning", "message": ev.text, "minute": minute})
+        elif "corner" in lower and "race" not in lower:
+            alerts.append({"type": "info", "message": ev.text, "minute": minute})
+
+    return alerts[-6:]
 
 def _to_float(value, default=0.0):
     try:

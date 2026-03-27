@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(find /home/work/vscode-ws/edscript/edscript-data -type f \\\\\\(-name *.py -o -name *.parquet -o -name *.json -o -name *.joblib -o -name *.pkl -o -name requirements* -o -name Dockerfile -o -name *.sh -o -name nginx.conf \\\\\\))",
+      "Bash(find /home/work/vscode-ws/edscript/edscript-data -type f \\\\\\(-name requirements*.txt -o -name setup.py -o -name pyproject.toml -o -name Makefile \\\\\\))",
+      "Bash(python3 -m py_compile Data/main.py)",
+      "Bash(python3 -m py_compile Data/app/main.py Data/app/api/matches.py Data/app/models/schemas.py Data/app/services/heuristics.py)"
+    ]
+  }
+}
