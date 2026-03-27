@@ -2,137 +2,151 @@ import xgboost as xgb
 import numpy as np
 import requests
 import os
+import json
+import google.generativeai as genai
 from pathlib import Path
 from dotenv import load_dotenv
+import time
 
-# ====================== 1. CARREGA TOKEN + MODELO ======================
-load_dotenv()  # ← carrega .env automaticamente
-
+# ====================== 1. CONFIGURAÇÕES ======================
+load_dotenv()
 BASE_DIR = Path(__file__).resolve().parent
-MODEL_PATH = BASE_DIR / "Data" / "Copper" / "oraculo_iminencia_HIBRIDO_v1.json"
-
-oraculo = xgb.XGBClassifier()
-oraculo.load_model(str(MODEL_PATH))
-print(f"✅ Modelo carregado: {MODEL_PATH.name}\n")
 
 B365_TOKEN = os.getenv("B365_TOKEN")
-if not B365_TOKEN:
-    print("❌ ERRO: B365_TOKEN não encontrado no .env")
-    print("   Crie um arquivo .env na raiz do projeto com a linha:")
-    print("   B365_TOKEN=SEU_TOKEN_AQUI")
-    exit()
+GEMINI_KEY = os.getenv("HF_TOKEN")
 
-# ====================== 2. FUNÇÃO TRADUTORA ======================
-def preparar_input_real(jogo_api: dict, time_index: int = 0):
-    stats = jogo_api.get('stats', {})
-    dangerous_attacks = int(stats.get('dangerous_attacks', ["0", "0"])[time_index])
-    corners = int(stats.get('corners', ["0", "0"])[time_index])
+if GEMINI_KEY:
+    genai.configure(api_key=GEMINI_KEY)
+    llm_model = genai.GenerativeModel('gemini-2.5-flash')
 
-    x_simulado = 108.0
-    y_simulado = 40.0
-    dist = np.sqrt((120 - x_simulado)**2 + (40 - y_simulado)**2)
-    a = np.sqrt((120 - x_simulado)**2 + (36 - y_simulado)**2)
-    b = np.sqrt((120 - x_simulado)**2 + (44 - y_simulado)**2)
-    cos_theta = np.clip((a**2 + b**2 - 64) / (2 * a * b), -1.0, 1.0)
-    angulo = np.degrees(np.arccos(cos_theta))
+MODEL_PATH = BASE_DIR / "Data" / "Copper" / "oraculo_iminencia_HIBRIDO_v1.json"
+model_ia = xgb.XGBClassifier()
+model_ia.load_model(str(MODEL_PATH))
+print(f"✅ Sistema Híbrido Ativo: {MODEL_PATH.name}")
+
+# ====================== 2. GEMINI ======================
+def gerar_comentario_aura(home, away, p_gol, da, minuto):
+    if not GEMINI_KEY:
+        return "IA Offline."
+
+    prompt = (
+        f"Aja como o 'Aura da Sorte', analista técnico da Esporte da Sorte. "
+        f"Confronto: {home} vs {away} aos {minuto} min. "
+        f"DADOS: Iminência de Gol {p_gol:.1%} | Ataques Perigosos: {da}. "
+        f"Dê uma recomendação curta (máximo 15 palavras). Seja direto e use emojis. 🎯⚽"
+    )
+
+    try:
+        response = llm_model.generate_content(prompt)
+        return response.text.strip().replace('"', '')
+    except Exception as e:
+        print(f"❌ Erro na IA ({home}): {e}")
+        return "Aura processando tendências... 📈"
+
+# ====================== 3. FEATURES (HONESTAS) ======================
+def processar_metricas(match, time_index):
+    stats = match.get('stats', {})
+    timer = int(match.get("timer", {}).get("tm", 45))
+
+    da      = int(stats.get('dangerous_attacks', ["0", "0"])[time_index])
+    corners = int(stats.get('corners',           ["0", "0"])[time_index])
+    on_t    = int(stats.get('on_target',         ["0", "0"])[time_index])
+    off_t   = int(stats.get('off_target',        ["0", "0"])[time_index])
+    total_chutes = on_t + off_t
+
+    # X dinâmico: quanto mais pressão, mais perto do gol simulado
+    x_din = 100 + min((da / 5) + (total_chutes * 0.8), 18)
+    y_sim = 40.0
+    dist  = np.sqrt((120 - x_din)**2 + (40 - y_sim)**2)
 
     features = [
-        x_simulado,      # x
-        y_simulado,      # y
-        dist,            # distancia
-        angulo,          # angulo_visao
-        0.75,            # pressao_10_lances
-        3.5,             # aceleracao_ataque
-        1.8,             # progresso_ultimo_lance
-        corners,         # cantos
-        dangerous_attacks # atq_perigosos
+        x_din,
+        y_sim,
+        dist,
+        45.0,                      # ângulo fixo (limitação conhecida)
+        0.5 + (timer / 180),       # pressão temporal
+        da / max(timer, 1),        # ritmo de ataque
+        1.8,                       # placeholder (limitação conhecida)
+        corners,
+        da
     ]
-    return np.array([features])
 
-# ====================== 3. BUSCA JOGOS AO VIVO (REAL) ======================
-def get_live_matches():
-    url = "https://api.b365api.com/v3/events/inplay"
-    params = {
-        "sport_id": 1,
-        "token": B365_TOKEN
-    }
-    try:
-        r = requests.get(url, params=params, timeout=15)
-        r.raise_for_status()
-        data = r.json()
-        if data.get("success") != 1:
-            print("❌ API retornou erro:", data.get("error", "desconhecido"))
-            return []
-        results = data.get("results", [])
-        print(f"📡 {len(results)} jogos ao vivo encontrados na BetsApi!")
-        return results
-    except requests.exceptions.HTTPError as e:
-        if e.response.status_code == 401:
-            print("❌ 401 Unauthorized → Token inválido ou expirado")
-        else:
-            print(f"❌ Erro HTTP: {e}")
-        return []
-    except Exception as e:
-        print(f"❌ Erro na requisição: {e}")
-        return []
+    # Probabilidade real do modelo
+    prob_gol = float(model_ia.predict_proba(np.array([features]))[0][1])
 
-# ====================== 4. EXECUÇÃO AO VIVO ======================
-# ====================== 4. EXECUÇÃO AO VIVO (CORRIGIDO) ======================
+    return prob_gol, da, total_chutes
+
+# ====================== 4. FILTRO ======================
+def jogo_valido(match):
+    if match.get("time_status") != "1":
+        return False
+    if 'stats' not in match or not match['stats']:
+        return False
+    timer = int(match.get("timer", {}).get("tm", 0))
+    return 1 <= timer <= 100
+
+# ====================== 5. EXECUÇÃO ======================
 if __name__ == "__main__":
-    live_matches = get_live_matches()
+    print("📡 Capturando dados ao vivo...")
 
-    if not live_matches:
-        print("\nNenhum jogo ao vivo no momento ou erro na API.")
-        exit()
+    try:
+        r = requests.get(
+            "https://api.b365api.com/v3/events/inplay",
+            params={"sport_id": 1, "token": B365_TOKEN},
+            timeout=10
+        )
+        r.raise_for_status()
+    except Exception as e:
+        print(f"❌ Erro na API: {e}")
+        exit(1)
 
-    print("\n" + "="*90)
-    print("🔥 ORÁCULO AO VIVO - Probabilidade de Gol Iminente (BetsApi)")
-    print("="*90)
+    matches = [m for m in r.json().get("results", []) if jogo_valido(m)][:10]
 
-    predictions = []
+    if not matches:
+        print("⚠️ Nenhum jogo válido encontrado.")
+        exit(0)
 
-    for match in live_matches:
-        # --- TRAVA DE SEGURANÇA: Só processa se tiver 'stats' ---
-        if 'stats' not in match or not match['stats']:
-            # Opcional: print(f"⚠️ Pulando {match['home']['name']} (sem estatísticas ao vivo)")
-            continue
+    print(f"📊 Processando {len(matches)} jogos...\n")
+    final_report = []
 
-        home_name = match["home"]["name"]
-        away_name = match["away"]["name"]
-        league = match["league"]["name"]
-        timer = match.get("timer", {}).get("tm", "?")
-        ss = match.get("ss", "?-?")
-        
-        # Pegamos as stats com segurança para os prints
-        stats = match.get('stats', {})
-        da_list = stats.get('dangerous_attacks', ['0', '0'])
+    for match in matches:
+        home = match["home"]["name"]
+        away = match["away"]["name"]
+        tm   = match["timer"]["tm"]
 
-        # CASA
-        input_home = preparar_input_real(match, 0)
-        prob_home = oraculo.predict_proba(input_home)[0][1]
+        pg_h, da_h, chutes_h = processar_metricas(match, 0)
+        pg_a, da_a, chutes_a = processar_metricas(match, 1)
 
-        # FORA
-        input_away = preparar_input_real(match, 1)
-        prob_away = oraculo.predict_proba(input_away)[0][1]
+        # Time com maior iminência de gol é o foco
+        if pg_h >= pg_a:
+            p_gol, t_foco, da_foco, chutes_foco = pg_h, home, da_h, chutes_h
+        else:
+            p_gol, t_foco, da_foco, chutes_foco = pg_a, away, da_a, chutes_a
 
-        print(f"🏟️ {league}")
-        print(f"   ⏱️ {timer}' | {home_name} {ss} {away_name}")
-        print(f"   🔥 CASA → {prob_home:.1%}  (DA: {da_list[0]})")
-        print(f"   🔥 FORA → {prob_away:.1%}  (DA: {da_list[1]})")
-        print("-" * 80)
+        comentario = "Volume ofensivo baixo, aguardando pressão."
+        if p_gol > 0.65:
+            comentario = gerar_comentario_aura(home, away, p_gol, da_foco, tm)
+            time.sleep(2)
 
-        predictions.append({
-            "match": f"{home_name} vs {away_name}",
-            "prob_max": max(prob_home, prob_away)
-        })
+        item = {
+            "partida": f"{home} vs {away}",
+            "minuto": tm,
+            "analise": {
+                "prob_gol_iminente":  round(p_gol, 4),
+                "time_pressionando":  t_foco,
+                "ataques_perigosos":  da_foco,
+                "chutes_totais":      chutes_foco
+            },
+            "veredito_ia": comentario
+        }
+        final_report.append(item)
 
-    # ... resto do código (TOP 5)
+        icon = "🚨" if p_gol > 0.8 else "📈" if p_gol > 0.65 else "🔘"
+        print(f"{icon} {home} vs {away} ({tm}')")
+        print(f"   ⚽ Iminência de Gol: {p_gol:.1%} | Time: {t_foco}")
+        print(f"   💡 {comentario}\n" + "-"*60)
 
-    # TOP 5
-    print("\n🏆 TOP 5 MAIS IMINENTES (maior probabilidade)")
-    sorted_preds = sorted(predictions, key=lambda x: x["prob_max"], reverse=True)
-    for i, p in enumerate(sorted_preds[:5], 1):
-        print(f"{i}. {p['match']} → {p['prob_max']:.1%}")
+    with open("analise_aura_da_sorte.json", "w", encoding="utf-8") as f:
+        json.dump(final_report, f, indent=4, ensure_ascii=False)
 
-    print("\n✅ Oráculo AO VIVO funcionando!")
-    print("   Rode o script novamente para atualizar os jogos ao vivo.")
+    print("✅ Relatório salvo em analise_aura_da_sorte.json")
