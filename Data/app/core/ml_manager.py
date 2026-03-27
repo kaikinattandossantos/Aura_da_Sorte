@@ -6,7 +6,8 @@ import xgboost as xgb
 import numpy as np
 import json
 
-BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+# Como estamos em Data/app/core/ml_manager.py, subimos 3 níveis para chegar na pasta raiz "Data"
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 COPPER_DIR = os.path.join(BASE_DIR, "Copper")
 
 parquet_path = os.path.join(COPPER_DIR, "shots_preparados.parquet")

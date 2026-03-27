@@ -20,6 +20,7 @@ RUN pip install --no-cache-dir \
     scikit-learn \
     joblib \
     pydantic \
+    pyarrow \
     requests
 
 # Copy application code and data
