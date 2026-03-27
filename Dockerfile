@@ -19,7 +19,8 @@ RUN pip install --no-cache-dir \
     xgboost \
     scikit-learn \
     joblib \
-    pydantic
+    pydantic \
+    requests
 
 # Copy application code and data
 COPY Data/ ./Data/

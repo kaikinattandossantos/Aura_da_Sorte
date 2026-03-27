@@ -1,0 +1,102 @@
+[
+    {
+        "partida": "Tigres de Álica FC II vs CD Halcones de Nayarit",
+        "minuto": 59,
+        "analise": {
+            "prob_gol_iminente": 0.3712,
+            "prob_chute_iminente": 0.99,
+            "time_pressionando": "Tigres de Álica FC II"
+        },
+        "veredito_ia": "'Gols'! Com 37.1% de conversão e 99% no alvo, o lucro está lá. Oportunidade de ouro! ⚽✨"
+    },
+    {
+        "partida": "CD Marino vs Real Union de Tenerife",
+        "minuto": 68,
+        "analise": {
+            "prob_gol_iminente": 0.2191,
+            "prob_chute_iminente": 0.6634,
+            "time_pressionando": "Real Union de Tenerife"
+        },
+        "veredito_ia": "Chutes: 66.3% no alvo é ouro! Mais lucrativo que Gols agora. 🎯💰"
+    },
+    {
+        "partida": "Aguilas Doradas vs Alianza",
+        "minuto": 67,
+        "analise": {
+            "prob_gol_iminente": 0.5536,
+            "prob_chute_iminente": 0.99,
+            "time_pressionando": "Aguilas Doradas"
+        },
+        "veredito_ia": "Aura da Sorte: Eficiência altíssima. Gols são mais lucrativos agora! ⚽🎯"
+    },
+    {
+        "partida": "Deportes Recoleta vs Deportes Temuco",
+        "minuto": 69,
+        "analise": {
+            "prob_gol_iminente": 0.2681,
+            "prob_chute_iminente": 0.8006,
+            "time_pressionando": "Deportes Temuco"
+        },
+        "veredito_ia": "Aura da Sorte aqui! Com 80.1% no alvo, 'Chutes' é o caminho mais lucrativo agora. 🎯✨"
+    },
+    {
+        "partida": "UD Telde vs UD Tamaraceite",
+        "minuto": 67,
+        "analise": {
+            "prob_gol_iminente": 0.914,
+            "prob_chute_iminente": 0.99,
+            "time_pressionando": "UD Telde"
+        },
+        "veredito_ia": "Com 99% Chute no Alvo, Gols são bons, mas Chutes são lucro *certo* agora! 🎯💰"
+    },
+    {
+        "partida": "Barcelona Guayaquil (W) vs Macara (W)",
+        "minuto": 67,
+        "analise": {
+            "prob_gol_iminente": 0.8798,
+            "prob_chute_iminente": 0.98,
+            "time_pressionando": "Macara (W)"
+        },
+        "veredito_ia": "Aura processando tendências... 📈"
+    },
+    {
+        "partida": "Águilas UAGro vs Caudillos De Morelos FC",
+        "minuto": 55,
+        "analise": {
+            "prob_gol_iminente": 0.9124,
+            "prob_chute_iminente": 0.99,
+            "time_pressionando": "Águilas UAGro"
+        },
+        "veredito_ia": "Aura processando tendências... 📈"
+    },
+    {
+        "partida": "Estudiantes de Queretaro vs Club Celaya II",
+        "minuto": 54,
+        "analise": {
+            "prob_gol_iminente": 0.8462,
+            "prob_chute_iminente": 0.99,
+            "time_pressionando": "Estudiantes de Queretaro"
+        },
+        "veredito_ia": "Aura processando tendências... 📈"
+    },
+    {
+        "partida": "Club Ciudad de Bolivar vs Agropecuario",
+        "minuto": 52,
+        "analise": {
+            "prob_gol_iminente": 0.0815,
+            "prob_chute_iminente": 0.2282,
+            "time_pressionando": "Club Ciudad de Bolivar"
+        },
+        "veredito_ia": "Estudo de volume em andamento."
+    },
+    {
+        "partida": "Paysandu FC vs Miramar Misiones",
+        "minuto": 45,
+        "analise": {
+            "prob_gol_iminente": 0.911,
+            "prob_chute_iminente": 0.99,
+            "time_pressionando": "Paysandu FC"
+        },
+        "veredito_ia": "Aura processando tendências... 📈"
+    }
+]
