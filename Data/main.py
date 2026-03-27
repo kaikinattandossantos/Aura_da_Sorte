@@ -6,7 +6,8 @@ import xgboost as xgb
 import os
 import json
 import joblib
-from typing import Dict, Any
+import re
+from typing import Dict, Any, Optional
 import requests
 from pydantic import BaseModel, ConfigDict, Field
 app = FastAPI(title="Analytics API - Performance Pro")
@@ -22,6 +23,143 @@ class MatchAnalyzeRequest(BaseModel):
     results: list[Dict[str, Any]] = Field(default_factory=list)
 
     model_config = ConfigDict(extra="allow")
+
+
+# ---------------------------------------------------------------------------
+# B365 event models
+# ---------------------------------------------------------------------------
+
+CC_TO_FLAG: Dict[str, str] = {
+    "ar": "🇦🇷", "br": "🇧🇷", "es": "🇪🇸", "de": "🇩🇪", "fr": "🇫🇷",
+    "it": "🇮🇹", "pt": "🇵🇹", "nl": "🇳🇱", "be": "🇧🇪", "us": "🇺🇸",
+    "mx": "🇲🇽", "co": "🇨🇴", "uy": "🇺🇾", "cl": "🇨🇱", "pe": "🇵🇪",
+    "bo": "🇧🇴", "py": "🇵🇾", "ec": "🇪🇨", "ve": "🇻🇪", "gb": "🇬🇧",
+    "en": "🏴󠁧󠁢󠁥󠁮󠁧󠁿", "tr": "🇹🇷", "ru": "🇷🇺", "cn": "🇨🇳", "jp": "🇯🇵",
+    "kr": "🇰🇷", "dz": "🇩🇿", "gt": "🇬🇹", "sa": "🇸🇦", "ua": "🇺🇦",
+    "ng": "🇳🇬", "gh": "🇬🇭", "za": "🇿🇦", "eg": "🇪🇬", "ma": "🇲🇦",
+    "at": "🇦🇹", "ch": "🇨🇭", "se": "🇸🇪", "no": "🇳🇴", "dk": "🇩🇰",
+    "pl": "🇵🇱", "cz": "🇨🇿", "hu": "🇭🇺", "ro": "🇷🇴", "hr": "🇭🇷",
+    "gr": "🇬🇷",
+}
+
+
+class B365League(BaseModel):
+    id: str = ""
+    name: str = "Unknown League"
+    cc: str = ""
+    model_config = ConfigDict(extra="allow")
+
+
+class B365Team(BaseModel):
+    id: str = ""
+    name: str = ""
+    image_id: str = ""
+    cc: str = ""
+    model_config = ConfigDict(extra="allow")
+
+
+class B365Stats(BaseModel):
+    attacks: list[str] = Field(default_factory=lambda: ["0", "0"])
+    ball_safe: list[str] = Field(default_factory=lambda: ["0", "0"])
+    corners: list[str] = Field(default_factory=lambda: ["0", "0"])
+    corner_f: list[str] = Field(default_factory=lambda: ["0", "0"])
+    corner_h: list[str] = Field(default_factory=lambda: ["0", "0"])
+    dangerous_attacks: list[str] = Field(default_factory=lambda: ["0", "0"])
+    goals: list[str] = Field(default_factory=lambda: ["0", "0"])
+    off_target: list[str] = Field(default_factory=lambda: ["0", "0"])
+    on_target: list[str] = Field(default_factory=lambda: ["0", "0"])
+    penalties: list[str] = Field(default_factory=lambda: ["0", "0"])
+    possession_rt: list[str] = Field(default_factory=lambda: ["50", "50"])
+    redcards: list[str] = Field(default_factory=lambda: ["0", "0"])
+    substitutions: list[str] = Field(default_factory=lambda: ["0", "0"])
+    yellowcards: list[str] = Field(default_factory=lambda: ["0", "0"])
+    yellowred_cards: list[str] = Field(default_factory=lambda: ["0", "0"])
+    model_config = ConfigDict(extra="allow")
+
+
+class B365Extra(BaseModel):
+    length: int = 90
+    home_pos: str = ""
+    away_pos: str = ""
+    numberofperiods: str = "2"
+    periodlength: str = "45"
+    round: str = ""
+    model_config = ConfigDict(extra="allow")
+
+
+class B365Event(BaseModel):
+    id: str = ""
+    text: str = ""
+    model_config = ConfigDict(extra="allow")
+
+
+class B365MatchResult(BaseModel):
+    id: str = ""
+    sport_id: str = ""
+    time: str = ""
+    time_status: str = ""
+    league: B365League = Field(default_factory=B365League)
+    home: B365Team = Field(default_factory=B365Team)
+    away: B365Team = Field(default_factory=B365Team)
+    ss: str = "0-0"
+    scores: Dict[str, Any] = Field(default_factory=dict)
+    stats: B365Stats = Field(default_factory=B365Stats)
+    extra: B365Extra = Field(default_factory=B365Extra)
+    events: list[B365Event] = Field(default_factory=list)
+    has_lineup: int = 0
+    inplay_created_at: str = ""
+    inplay_updated_at: str = ""
+    confirmed_at: str = ""
+    bet365_id: str = ""
+    model_config = ConfigDict(extra="allow")
+
+
+class B365MatchEvent(BaseModel):
+    success: int = 1
+    results: list[B365MatchResult] = Field(default_factory=list)
+
+
+# ---------------------------------------------------------------------------
+# B365 helpers
+# ---------------------------------------------------------------------------
+
+def _cc_to_flag(cc: str) -> str:
+    return CC_TO_FLAG.get(cc.lower(), "")
+
+
+def _extract_timer(match: B365MatchResult) -> int:
+    """Retorna o minuto atual da partida."""
+    if match.time_status == "3":          # encerrada
+        return match.extra.length
+    minutes = [
+        int(m.group(1))
+        for ev in match.events
+        if (m := re.match(r"^(\d+)'", ev.text))
+    ]
+    return max(minutes) if minutes else 0
+
+
+def _parse_events_to_alerts(events: list[B365Event], home_name: str, away_name: str) -> list[dict]:
+    """Converte eventos B365 em alertas para o dashboard."""
+    alerts = []
+    for ev in events:
+        text = ev.text
+        m = re.match(r"^(\d+)'", text)
+        if not m:
+            continue
+        minute = int(m.group(1))
+        lower = text.lower()
+
+        if "goal" in lower and "race" not in lower and "score after" not in lower:
+            alerts.append({"type": "success", "message": text, "minute": minute})
+        elif "red card" in lower:
+            alerts.append({"type": "danger", "message": text, "minute": minute})
+        elif "yellow card" in lower:
+            alerts.append({"type": "warning", "message": text, "minute": minute})
+        elif "corner" in lower and "race" not in lower:
+            alerts.append({"type": "info", "message": text, "minute": minute})
+
+    return alerts[-6:]  # últimos 6 eventos relevantes
 
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -500,6 +638,148 @@ async def analyze_team_cards(team_name: str, top_n: int = 10):
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Erro no processamento de cartões do time: {str(e)}")
+
+def _build_dashboard_from_b365(match: B365MatchResult, prob: float, narrativa: dict) -> dict:
+    """Monta a resposta no formato app.json a partir de um resultado B365."""
+    nivel = "CRÍTICO" if prob > 0.80 else "ALTO" if prob > 0.60 else "NORMAL"
+    timer = _extract_timer(match)
+    stats = match.stats
+
+    # Placar
+    try:
+        goals_home, goals_away = (int(p) for p in match.ss.split("-", 1))
+    except Exception:
+        goals_home, goals_away = int(_to_float(stats.goals[0])), int(_to_float(stats.goals[1])) if len(stats.goals) > 1 else 0
+
+    # Posse, ataques
+    poss_home = int(_to_float(stats.possession_rt[0], 50))
+    poss_away = int(_to_float(stats.possession_rt[1], 50)) if len(stats.possession_rt) > 1 else 100 - poss_home
+    attack_home = int(_to_float(stats.dangerous_attacks[0]))
+    attack_away = int(_to_float(stats.dangerous_attacks[1])) if len(stats.dangerous_attacks) > 1 else 0
+
+    total_attacks = max(1, attack_home + attack_away)
+    momentum_home = min(95, round(attack_home / total_attacks * 100))
+    momentum_away = 100 - momentum_home
+
+    # Probabilidades
+    home_prob = round(prob, 2)
+    away_prob = round((1 - prob) * 0.35, 2)
+    draw_prob = round(max(0.0, 1.0 - home_prob - away_prob), 2)
+
+    # Alertas: eventos reais da partida + alerta do modelo
+    alerts = _parse_events_to_alerts(match.events, match.home.name, match.away.name)
+    if narrativa.get("summary"):
+        alerts.insert(0, {"type": "info", "message": narrativa["summary"], "minute": timer})
+
+    # Próximos minutos
+    corners_home = int(_to_float(stats.corners[0]))
+    corners_away = int(_to_float(stats.corners[1])) if len(stats.corners) > 1 else 0
+    subs_home = int(_to_float(stats.substitutions[0]))
+    subs_away = int(_to_float(stats.substitutions[1])) if len(stats.substitutions) > 1 else 0
+    yellows = int(_to_float(stats.yellowcards[0])) + (int(_to_float(stats.yellowcards[1])) if len(stats.yellowcards) > 1 else 0)
+
+    corner_rate = min(0.95, (corners_home + corners_away) / max(1, timer) * 5)
+    sub_prob = min(0.95, (subs_home + subs_away) / max(1, timer) * 10)
+    yellow_rate = min(0.95, yellows / max(1, timer) * 10)
+
+    next_minutes = [
+        {"event": "goal",           "label": "Gol nos próx. 10 min",  "window": f"{timer}' → {timer + 10}'", "prob": round(prob, 2),                          "color": "green" if prob > 0.6 else "yellow"},
+        {"event": "corner",         "label": "Escanteio",              "window": "Próximos 5 min",            "prob": round(corner_rate, 2),                    "color": "yellow"},
+        {"event": "yellow_card",    "label": "Cartão amarelo",         "window": "Próximos 10 min",           "prob": round(yellow_rate, 2),                    "color": "yellow"},
+        {"event": "substitution",   "label": "Substituição",           "window": "Próximos 5 min",            "prob": round(sub_prob, 2),                       "color": "blue"},
+        {"event": "dangerous_foul", "label": "Falta perigosa",         "window": "Próximos 5 min",            "prob": round(min(0.95, prob * 0.45), 2),         "color": "red"},
+        {"event": "shot_on_target", "label": "Chute a gol",            "window": "Próximos 3 min",            "prob": round(min(0.95, prob * 1.1), 2),          "color": "green" if prob > 0.7 else "yellow"},
+    ]
+
+    # Mercados finais
+    total_goals = goals_home + goals_away
+    btts_prob = round(min(0.95, (1 if goals_away > 0 else 0) * 0.7 + prob * 0.1), 2)
+    final_result = [
+        {"market": "home_win",                   "label": f"{match.home.name} vence",        "description": "Vitória do mandante",   "prob": home_prob,                                "color": "green" if home_prob > 0.6 else "yellow" if home_prob > 0.4 else "red"},
+        {"market": "btts",                        "label": "Ambos marcam",                    "description": "Ambas marcam",          "prob": btts_prob,                                "color": "green" if btts_prob > 0.6 else "yellow" if btts_prob > 0.4 else "red"},
+        {"market": f"over_{total_goals + 1}_5",  "label": f"Mais de {total_goals + 1},5 gols", "description": "Total da partida",   "prob": round(min(0.95, prob * 0.7), 2),          "color": "green" if prob > 0.7 else "yellow" if prob > 0.5 else "red"},
+    ]
+
+    return {
+        "match_id": match.id,
+        "league": match.league.name,
+        "timer": timer,
+        "score": match.ss,
+        "teams": {
+            "home": {"name": match.home.name, "flag": _cc_to_flag(match.home.cc)},
+            "away": {"name": match.away.name, "flag": _cc_to_flag(match.away.cc)},
+        },
+        "predictions": {
+            "home_prob": home_prob,
+            "draw_prob": draw_prob,
+            "away_prob": away_prob,
+            "alert_level": nivel,
+        },
+        "alerts": alerts,
+        "momentum": {
+            "home": momentum_home,
+            "away": momentum_away,
+            "note": f"{match.home.name} dominando" if momentum_home > 60 else f"{match.away.name} dominando" if momentum_away > 60 else "Equilíbrio",
+        },
+        "live_stats": {
+            "possession_home": poss_home,
+            "possession_away": poss_away,
+            "goals_home": goals_home,
+            "goals_away": goals_away,
+            "attack_home": attack_home,
+            "attack_away": attack_away,
+        },
+        "next_minutes": next_minutes,
+        "final_result": final_result,
+    }
+
+
+@app.post("/matches/dashboard/{match_id}")
+async def match_dashboard(match_id: int, event: B365MatchEvent):
+    if not event.results:
+        raise HTTPException(status_code=422, detail="Campo 'results' vazio no payload.")
+
+    match = event.results[0]
+
+    try:
+        # Adapta stats B365 para o formato do Oráculo
+        analyze_input = {
+            "ataques_perigosos": {},
+            "escanteios": {},
+            "x": 105.0,
+            "y": 40.0,
+            "location": None,
+            "stats": {
+                "dangerous_attacks": [int(_to_float(v)) for v in match.stats.dangerous_attacks],
+                "corners": [int(_to_float(v)) for v in match.stats.corners],
+            },
+            "results": [],
+        }
+
+        parsed_input = preparar_input_hibrido(analyze_input)
+        features = parsed_input["features"]
+        prob = float(oraculo_model.predict_proba([features])[:, 1][0])
+
+        contexto_ia = (
+            f"{match.home.name} vs {match.away.name}: {match.ss}. "
+            f"{features[8]:.0f} ataques perigosos e {features[7]:.0f} escanteios."
+        )
+        narrativa = await gerar_narrativa_oraculo(contexto_ia, prob)
+
+        return _build_dashboard_from_b365(match, prob, narrativa)
+
+    except Exception as e:
+        print(f"❌ Erro no Dashboard: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "status": "error",
+                "code": "DASHBOARD_PROCESSING_ERROR",
+                "message": "Erro ao processar dashboard da partida.",
+                "match_id": match_id,
+            },
+        )
+
 
 if __name__ == "__main__":
     import uvicorn
