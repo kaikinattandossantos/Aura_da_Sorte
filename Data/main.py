@@ -8,7 +8,20 @@ import json
 import joblib
 from typing import Dict, Any
 import requests
+from pydantic import BaseModel, ConfigDict, Field
 app = FastAPI(title="Analytics API - Performance Pro")
+
+
+class MatchAnalyzeRequest(BaseModel):
+    ataques_perigosos: Dict[str, Any] = Field(default_factory=dict)
+    escanteios: Dict[str, Any] = Field(default_factory=dict)
+    x: float | str | None = None
+    y: float | str | None = None
+    location: list[Any] | None = None
+    stats: Dict[str, Any] = Field(default_factory=dict)
+    results: list[Dict[str, Any]] = Field(default_factory=list)
+
+    model_config = ConfigDict(extra="allow")
 
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -23,7 +36,10 @@ cards_yellow_model_path = os.path.join(COPPER_DIR, "cards_yellow_model.joblib")
 cards_red_model_path = os.path.join(COPPER_DIR, "cards_red_model.joblib")
 
 HF_TOKEN = os.getenv("HF_TOKEN") 
-oraculo_model_path = os.path.join(BASE_DIR,"Copper/oraculo_iminencia_HIBRIDO.json")
+oraculo_model_path = os.path.join(BASE_DIR, "Copper", "oraculo_iminencia_HIBRIDO_v1.json")
+if not os.path.exists(oraculo_model_path):
+    # Fallback para compatibilidade com nome legado.
+    oraculo_model_path = os.path.join(BASE_DIR, "Copper", "oraculo_iminencia_HIBRIDO.json")
 oraculo_model = xgb.XGBClassifier()
 oraculo_model.load_model(oraculo_model_path)
 
@@ -78,7 +94,10 @@ except Exception as e:
 
 async def gerar_narrativa_oraculo(contexto, probabilidade):
     if not HF_TOKEN:
-        return "sem token Hugging Face configurado. Configure a variável de ambiente HF_TOKEN"
+        return {
+            "summary": "sem token Hugging Face configurado. Configure a variável de ambiente HF_TOKEN",
+            "source": "fallback"
+        }
         
     API_URL = "https://api-inference.huggingface.co/models/mistralai/Mistral-7B-Instruct-v0.2"
     headers = {"Authorization": f"Bearer {HF_TOKEN}"}
@@ -87,9 +106,78 @@ async def gerar_narrativa_oraculo(contexto, probabilidade):
     
     try:
         response = requests.post(API_URL, headers=headers, json={"inputs": prompt}, timeout=5)
-        return response.json()[0]['generated_text'].split("[/INST]")[-1].strip()
-    except:
-        return f"🚨 PERIGO! O Oráculo detectou {probabilidade:.1%} de chance de gol agora!"
+        payload = response.json()
+        if isinstance(payload, list) and payload and "generated_text" in payload[0]:
+            text = payload[0]["generated_text"].split("[/INST]")[-1].strip()
+            if text:
+                return {
+                    "summary": text,
+                    "source": "llm"
+                }
+        raise ValueError("Resposta inesperada da API de inferência")
+    except Exception:
+        return {
+            "summary": f"🚨 PERIGO! O Oráculo detectou {probabilidade:.1%} de chance de gol agora!",
+            "source": "fallback"
+        }
+
+
+async def gerar_narrativa_cartao(contexto, probabilidade, tipo_cartao):
+    if not HF_TOKEN:
+        return {
+            "summary": f"Sem HF_TOKEN. Risco de cartao {tipo_cartao}: {probabilidade:.1%}.",
+            "source": "fallback"
+        }
+
+    API_URL = "https://api-inference.huggingface.co/models/mistralai/Mistral-7B-Instruct-v0.2"
+    headers = {"Authorization": f"Bearer {HF_TOKEN}"}
+
+    prompt = (
+        f"<s>[INST] Voce e um analista de futebol. Gere 1 frase curta e objetiva sobre risco de cartao {tipo_cartao}. "
+        f"Contexto: {contexto}. Probabilidade: {probabilidade:.1%}. [/INST]"
+    )
+
+    try:
+        response = requests.post(API_URL, headers=headers, json={"inputs": prompt}, timeout=5)
+        payload = response.json()
+        if isinstance(payload, list) and payload and "generated_text" in payload[0]:
+            text = payload[0]["generated_text"].split("[/INST]")[-1].strip()
+            if text:
+                return {
+                    "summary": text,
+                    "source": "llm"
+                }
+        raise ValueError("Resposta inesperada da API de inferencia")
+    except Exception:
+        return {
+            "summary": f"Risco de cartao {tipo_cartao} em {probabilidade:.1%}.",
+            "source": "fallback"
+        }
+
+
+def _to_float(value, default=0.0):
+    try:
+        if value is None:
+            return float(default)
+        if isinstance(value, str):
+            return float(value.replace(",", "."))
+        return float(value)
+    except (TypeError, ValueError):
+        return float(default)
+
+
+def _extract_stats_payload(dados_live: Dict[str, Any]) -> Dict[str, Any]:
+    stats = dados_live.get("stats")
+    if isinstance(stats, dict):
+        return stats
+
+    results = dados_live.get("results")
+    if isinstance(results, list) and results and isinstance(results[0], dict):
+        nested_stats = results[0].get("stats")
+        if isinstance(nested_stats, dict):
+            return nested_stats
+
+    return {}
 
 def build_card_feature_list(df: pd.DataFrame) -> list[str]:
     excluded_exact = {"Rk", "Player", "Nation", "Comp"}
@@ -142,18 +230,88 @@ async def root():
     return {"status": "online", "api": "Analytics Performance"}
 
 
+@app.get("/contracts/matches-analyze")
+async def get_matches_analyze_contract():
+    return {
+        "endpoint": "/matches/analyze/{match_id}",
+        "method": "POST",
+        "request": {
+            "description": "Aceita payload bruto da B365 (v1/event/view, v3/event/view) e/ou payload normalizado.",
+            "required": [],
+            "optional": [
+                "ataques_perigosos.casa",
+                "escanteios.total",
+                "x",
+                "y",
+                "location[0]",
+                "location[1]",
+                "stats.dangerous_attacks",
+                "stats.corners",
+                "results[0].stats.dangerous_attacks",
+                "results[0].stats.corners"
+            ]
+        },
+        "response_success_example": {
+            "status": "success",
+            "match_id": 12345,
+            "analysis": {
+                "probabilidade": 0.7342,
+                "nivel": "ALTO",
+                "cor_alerta": "#FFA500"
+            },
+            "insights": {
+                "summary": "Pressão ofensiva crescente no time da casa.",
+                "source": "llm"
+            },
+            "signals": {
+                "x": 105.0,
+                "y": 40.0,
+                "ataques_perigosos_casa": 37.0,
+                "escanteios_total": 8.0
+            },
+            "timestamp": "2026-03-27T12:00:00"
+        },
+        "response_error_example": {
+            "status": "error",
+            "code": "ANALYSIS_PROCESSING_ERROR",
+            "message": "Erro ao processar análise da partida.",
+            "match_id": 12345
+        }
+    }
+
+
 
 # 1. Função Tradutora (Mapeia o JSON da APIBet para as 9 Features)
 def preparar_input_hibrido(dados_live):
-    # Extração dos dados Macro (Ataques e Escanteios)
-    # A APIBet geralmente manda 'dangerous_attacks' e 'corners'
-    ataques_casa = float(dados_live.get("ataques_perigosos", {}).get("casa", 0))
-    escanteios_total = float(dados_live.get("escanteios", {}).get("total", 0))
+    # Extração dos dados Macro com suporte a múltiplos formatos.
+    ataques_casa = _to_float(dados_live.get("ataques_perigosos", {}).get("casa", 0), 0)
+    escanteios_total = _to_float(dados_live.get("escanteios", {}).get("total", 0), 0)
+
+    stats = _extract_stats_payload(dados_live)
+    dangerous_attacks = stats.get("dangerous_attacks", [0, 0])
+    corners = stats.get("corners", [0, 0])
+
+    if isinstance(dangerous_attacks, list) and dangerous_attacks:
+        ataques_casa = _to_float(dangerous_attacks[0], ataques_casa)
+    elif dangerous_attacks is not None:
+        ataques_casa = _to_float(dangerous_attacks, ataques_casa)
+
+    if isinstance(corners, list) and corners:
+        canto_casa = _to_float(corners[0], 0)
+        canto_fora = _to_float(corners[1], 0) if len(corners) > 1 else 0.0
+        escanteios_total = canto_casa + canto_fora
+    elif corners is not None:
+        escanteios_total = _to_float(corners, escanteios_total)
     
     # Dados Micro (Geometria)
     # Se a API não mandar X e Y exatos, usamos a média da zona de ataque (105, 40)
-    x = float(dados_live.get("x", 105.0))
-    y = float(dados_live.get("y", 40.0))
+    x = _to_float(dados_live.get("x", 105.0), 105.0)
+    y = _to_float(dados_live.get("y", 40.0), 40.0)
+
+    location = dados_live.get("location")
+    if isinstance(location, list) and len(location) >= 2:
+        x = _to_float(location[0], x)
+        y = _to_float(location[1], y)
 
     # Cálculos Geométricos (O Oráculo exige isso)
     dist = np.sqrt((120 - x)**2 + (40 - y)**2)
@@ -163,18 +321,28 @@ def preparar_input_hibrido(dados_live):
     ang = np.degrees(np.arccos(cos_theta))
 
     # Retorna o array exato de 9 colunas que o seu modelo espera
-    return [
+    features = [
         x, ang, dist, x,  # Ajuste a ordem conforme o SEU model.get_booster().feature_names
         0.65, 4.2, 1.8,   # Placeholders de pressão e aceleração
         escanteios_total, 
         ataques_casa
     ]
+    return {
+        "features": features,
+        "signals": {
+            "x": round(float(x), 2),
+            "y": round(float(y), 2),
+            "ataques_perigosos_casa": round(float(ataques_casa), 2),
+            "escanteios_total": round(float(escanteios_total), 2)
+        }
+    }
 
 @app.post("/matches/analyze/{match_id}")
-async def analyze_match(match_id: int, live_data: Dict[str, Any]):
+async def analyze_match(match_id: int, live_data: MatchAnalyzeRequest):
     try:
         # 1. Transforma o JSON da APIBet no formato da IA
-        features = preparar_input_hibrido(live_data)
+        parsed_input = preparar_input_hibrido(live_data.model_dump())
+        features = parsed_input["features"]
         
         # 2. O Oráculo Híbrido (0.78 AUC) entra em ação
         prob = float(oraculo_model.predict_proba([features])[:, 1][0])
@@ -183,20 +351,33 @@ async def analyze_match(match_id: int, live_data: Dict[str, Any]):
         contexto_ia = f"Time com {features[8]} ataques e {features[7]} escanteios. Pressão total!"
         narrativa = await gerar_narrativa_oraculo(contexto_ia, prob)
 
-        # 4. JSON "Bonitão" de volta para o seu amigo do Backend
+        nivel = "CRÍTICO" if prob > 0.80 else "ALTO" if prob > 0.60 else "NORMAL"
+        cor_alerta = "#FF0000" if prob > 0.80 else "#FFA500" if prob > 0.60 else "#00FF00"
+
+        # 4. Contrato padronizado para consumo do backend e frontend.
         return {
+            "status": "success",
             "match_id": match_id,
-            "oraculo": {
+            "analysis": {
                 "probabilidade": round(prob, 4),
-                "nivel": "CRÍTICO" if prob > 0.80 else "ALTO" if prob > 0.60 else "NORMAL",
-                "cor_alerta": "#FF0000" if prob > 0.80 else "#FFA500" if prob > 0.60 else "#00FF00"
+                "nivel": nivel,
+                "cor_alerta": cor_alerta
             },
-            "insight": narrativa,
-            "timestamp_live": pd.Timestamp.now().isoformat()
+            "insights": narrativa,
+            "signals": parsed_input["signals"],
+            "timestamp": pd.Timestamp.now().isoformat()
         }
     except Exception as e:
         print(f"❌ Erro na Integração Live: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "status": "error",
+                "code": "ANALYSIS_PROCESSING_ERROR",
+                "message": "Erro ao processar análise da partida.",
+                "match_id": match_id
+            }
+        )
 
 
 
@@ -212,6 +393,20 @@ async def analyze_player_cards(player_name: str):
             raise HTTPException(status_code=404, detail=f"Jogador {player_name} não encontrado.")
 
         row = player_rows.iloc[0]
+        prob_yellow = float(row["prob_yellow"])
+        prob_red = float(row["prob_red"])
+
+        contexto_amarelo = (
+            f"Jogador {row.get('Player')} do time {row.get('Squad')} com {int(row.get('CrdY', 0)) if pd.notna(row.get('CrdY')) else 0} "
+            "amarelos na temporada"
+        )
+        contexto_vermelho = (
+            f"Jogador {row.get('Player')} do time {row.get('Squad')} com {int(row.get('CrdR', 0)) if pd.notna(row.get('CrdR')) else 0} "
+            "vermelhos na temporada"
+        )
+
+        insight_amarelo = await gerar_narrativa_cartao(contexto_amarelo, prob_yellow, "amarelo")
+        insight_vermelho = await gerar_narrativa_cartao(contexto_vermelho, prob_red, "vermelho")
 
         return {
             "status": "success",
@@ -225,14 +420,18 @@ async def analyze_player_cards(player_name: str):
                 "cartoes_vermelhos_reais": int(row.get("CrdR", 0)) if pd.notna(row.get("CrdR")) else 0,
             },
             "predicao": {
-                "probabilidade_amarelo": round(float(row["prob_yellow"]), 4),
-                "probabilidade_vermelho": round(float(row["prob_red"]), 4),
+                "probabilidade_amarelo": round(prob_yellow, 4),
+                "probabilidade_vermelho": round(prob_red, 4),
                 "tendencia_amarelo": bool(int(row["pred_yellow"])),
                 "tendencia_vermelho": bool(int(row["pred_red"])),
                 "thresholds": {
                     "amarelo": yellow_threshold,
                     "vermelho": red_threshold,
                 },
+            },
+            "insights": {
+                "amarelo": insight_amarelo,
+                "vermelho": insight_vermelho,
             },
         }
 
@@ -256,13 +455,26 @@ async def analyze_team_cards(team_name: str, top_n: int = 10):
         top_yellow = team_rows.sort_values("prob_yellow", ascending=False).head(top_n)
         top_red = team_rows.sort_values("prob_red", ascending=False).head(top_n)
 
+        prob_amarelo_media = float(team_rows["prob_yellow"].mean())
+        prob_vermelho_media = float(team_rows["prob_red"].mean())
+
+        contexto_amarelo_time = f"Time {team_name} com media de risco de amarelo em {prob_amarelo_media:.1%}"
+        contexto_vermelho_time = f"Time {team_name} com media de risco de vermelho em {prob_vermelho_media:.1%}"
+
+        insight_amarelo_time = await gerar_narrativa_cartao(contexto_amarelo_time, prob_amarelo_media, "amarelo")
+        insight_vermelho_time = await gerar_narrativa_cartao(contexto_vermelho_time, prob_vermelho_media, "vermelho")
+
         return {
             "status": "success",
             "time": team_name,
             "jogadores_no_dataset": int(len(team_rows)),
             "medias_time": {
-                "prob_amarelo_media": round(float(team_rows["prob_yellow"].mean()), 4),
-                "prob_vermelho_media": round(float(team_rows["prob_red"].mean()), 4),
+                "prob_amarelo_media": round(prob_amarelo_media, 4),
+                "prob_vermelho_media": round(prob_vermelho_media, 4),
+            },
+            "insights": {
+                "amarelo": insight_amarelo_time,
+                "vermelho": insight_vermelho_time,
             },
             "top_risco_amarelo": [
                 {
