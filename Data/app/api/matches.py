@@ -111,9 +111,31 @@ async def analyze_match(match_id: int, live_data: MatchAnalyzeRequest):
         insights = calcular_probabilidades_heuristicas(stats_api, prob, time_m)
         previsoes = calcular_previsoes_jogo(stats_api, score)
 
-        # 4. Chama o Hugging Face para gerar a "Voz do Oráculo" baseada em metadados
-        contexto_ia = f"Placar {score}. Time da casa sofreu {stats_api.get('dangerous_attacks', [0,0])[1] if stats_api.get('dangerous_attacks') and len(stats_api['dangerous_attacks'])>1 else 0} ataques perigosos."
-        narrativa = await gerar_narrativa_oraculo(contexto_ia, prob)
+        # 4. Monta contexto rico com todos os dados reais para o LLM variar a narrativa
+        def _si(key, idx, default=0):
+            v = stats_api.get(key, [default, default])
+            return int(_to_float(v[idx] if len(v) > idx else default, default))
+
+        nivel = "CRÍTICO" if prob > 0.80 else "ALTO" if prob > 0.60 else "NORMAL"
+        ctx_llm = {
+            "prob":         prob,
+            "nivel":        nivel,
+            "score":        score,
+            "timer":        time_m,
+            "da_home":      _si("dangerous_attacks", 0),
+            "da_away":      _si("dangerous_attacks", 1),
+            "poss_home":    _si("possession_rt", 0, 50),
+            "poss_away":    _si("possession_rt", 1, 50),
+            "corners_home": _si("corners", 0),
+            "corners_away": _si("corners", 1),
+            "ot_home":      _si("on_target", 0),
+            "ot_away":      _si("on_target", 1),
+            "yc_home":      _si("yellowcards", 0),
+            "yc_away":      _si("yellowcards", 1),
+            "rc_home":      _si("redcards", 0),
+            "rc_away":      _si("redcards", 1),
+        }
+        narrativa = await gerar_narrativa_oraculo(ctx_llm)
 
         # 5. Entrega mastigada para o Backend Java e Front
         return {
@@ -170,16 +192,30 @@ async def match_dashboard(match_id: int, event: B365MatchEvent):
         dmatrix = xgb.DMatrix(np.array([features]))
         prob = float(ml_manager.oraculo_model.predict(dmatrix)[0])
 
-        contexto_ia = (
-            f"{match.home.name} vs {match.away.name}: {match.ss}. "
-            f"{features[8]:.0f} ataques perigosos e {features[7]:.0f} escanteios."
-        )
-        narrativa = await gerar_narrativa_oraculo(contexto_ia, prob)
-
         # --- monta resposta no formato app.json ---
         nivel = "CRÍTICO" if prob > 0.80 else "ALTO" if prob > 0.60 else "NORMAL"
         timer = extract_timer(match)
         stats = match.stats
+
+        ctx_llm = {
+            "prob":         prob,
+            "nivel":        nivel,
+            "score":        match.ss,
+            "timer":        timer,
+            "da_home":      int(_to_float(stats.dangerous_attacks[0])),
+            "da_away":      int(_to_float(stats.dangerous_attacks[1])) if len(stats.dangerous_attacks) > 1 else 0,
+            "poss_home":    int(_to_float(stats.possession_rt[0], 50)),
+            "poss_away":    int(_to_float(stats.possession_rt[1], 50)) if len(stats.possession_rt) > 1 else 50,
+            "corners_home": int(_to_float(stats.corners[0])),
+            "corners_away": int(_to_float(stats.corners[1])) if len(stats.corners) > 1 else 0,
+            "ot_home":      int(_to_float(stats.on_target[0])),
+            "ot_away":      int(_to_float(stats.on_target[1])) if len(stats.on_target) > 1 else 0,
+            "yc_home":      int(_to_float(stats.yellowcards[0])),
+            "yc_away":      int(_to_float(stats.yellowcards[1])) if len(stats.yellowcards) > 1 else 0,
+            "rc_home":      int(_to_float(stats.redcards[0])),
+            "rc_away":      int(_to_float(stats.redcards[1])) if len(stats.redcards) > 1 else 0,
+        }
+        narrativa = await gerar_narrativa_oraculo(ctx_llm)
 
         try:
             goals_home, goals_away = (int(p) for p in match.ss.split("-", 1))
